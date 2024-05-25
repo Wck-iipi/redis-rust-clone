@@ -31,10 +31,13 @@ fn main() {
                 println!("accepted new connection");
                 let _handle = std::thread::spawn(move || {
                     let mut request_buffer = [0; 512];
-                    let _request_buffer_size = stream
-                        .read(&mut request_buffer)
-                        .expect("Could not read from stream");
-                    stream.write("+PONG\r\n".as_bytes()).expect("HTTP Response");
+                    loop {
+                        let read_count = stream.read(&mut request_buffer).expect("HTTP Request");
+                        if read_count == 0 {
+                            break;
+                        }
+                        stream.write("+PONG\r\n".as_bytes()).expect("HTTP Response");
+                    }
                 });
             }
             Err(e) => {
