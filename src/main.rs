@@ -150,35 +150,68 @@ fn response_redis_type(
                         println!("Setting value");
                         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
                             if let RedisTypes::BulkString(value) = content.get(2).unwrap() {
-                                if let RedisTypes::BulkString(value) = content.get(3).unwrap() {
-                                    if (value.to_lowercase() == "px") {
-                                        if let RedisTypes::Integer(value) = content.get(4).unwrap()
-                                        {
-                                            return (
-                                                Some("+OK\r\n".to_string()),
-                                                Some((key.clone(), value.to_string())),
-                                                Some(value.clone()),
-                                            );
+                                if content.get(3).is_none() {
+                                    return (
+                                        Some("+OK\r\n".to_string()),
+                                        Some((key.clone(), value.clone())),
+                                        None,
+                                    );
+                                } else {
+                                    if let RedisTypes::BulkString(flag) = content.get(3).unwrap() {
+                                        if flag.to_lowercase() == "px" {
+                                            if let RedisTypes::BulkString(int) =
+                                                content.get(4).unwrap()
+                                            {
+                                                println!("Int: {}", int);
+                                                return (
+                                                    Some("+OK\r\n".to_string()),
+                                                    Some((key.clone(), value.clone())),
+                                                    Some(int.parse::<i32>().unwrap().clone()),
+                                                );
+                                            }
                                         }
                                     }
                                 }
-                                return (
-                                    Some("+OK\r\n".to_string()),
-                                    Some((key.clone(), value.clone())),
-                                    None,
-                                );
                             }
                         }
                         return (None, None, None);
                     } else if content_string == "GET" {
                         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
-                            if let Some(value) = hashmap.get(key) {
-                                println!("Key is {}", key);
-                                return (
-                                    Some(format!("${}\r\n{}\r\n", value.0.len(), value.0)),
-                                    None,
-                                    None,
-                                );
+                            if let Some((value, time, system_time)) = hashmap.get(key) {
+                                if time.is_none() {
+                                    return (
+                                        Some(format!("${}\r\n{}\r\n", value.len(), value.clone())),
+                                        None,
+                                        None,
+                                    );
+                                } else {
+                                    let current_time = SystemTime::now()
+                                        .duration_since(SystemTime::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_millis()
+                                        as i32;
+                                    let system_time_at_call = system_time
+                                        .unwrap()
+                                        .duration_since(SystemTime::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_millis()
+                                        as i32;
+                                    println!("Time: {:?}", time);
+                                    println!("Start time: {:?}", system_time_at_call);
+                                    println!("current_time: {:?}", current_time);
+
+                                    if current_time <= system_time_at_call + time.unwrap() {
+                                        return (
+                                            Some(format!(
+                                                "${}\r\n{}\r\n",
+                                                value.len(),
+                                                value.clone()
+                                            )),
+                                            None,
+                                            None,
+                                        );
+                                    }
+                                }
                             }
                         }
                         return (Some("$-1\r\n".to_string()), None, None);
@@ -198,33 +231,6 @@ fn response_redis_type(
                 }
                 RedisTypes::Error(_) => (None, None, None),
             }
-
-            // if let RedisTypes::BulkString(content_string) = content.get(0).unwrap() {
-            //     println!("Content String: {}", content_string);
-            //     if content_string == "ECHO" {
-            //         if let RedisTypes::BulkString(content_echoed) = content.get(1).unwrap() {
-            //             println!("Echoed: {}", content_echoed);
-            //             return (Some(format!("{}\r\n", content_echoed)), None);
-            //         }
-            //     } else if content_string == "SET" {
-            //         println!("Setting value");
-            //         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
-            //             if let RedisTypes::BulkString(value) = content.get(2).unwrap() {
-            //                 return (
-            //                     Some("+OK\r\n".to_string()),
-            //                     Some((key.clone(), value.clone())),
-            //                 );
-            //             }
-            //         }
-            //     } else if content_string == "GET" {
-            //         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
-            //             if let Some(value) = hashmap.get(key) {
-            //                 return (Some(format!("${}\r\n{}\r\n", value.len(), value)), None);
-            //             }
-            //         }
-            //     }
-            // }
-            // return (None, None, None);
         }
     }
 }
