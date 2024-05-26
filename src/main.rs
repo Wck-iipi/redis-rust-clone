@@ -3,21 +3,165 @@ use std::{
     net::TcpListener,
 };
 
-fn convert_to_vector(content: String) -> Vec<String> {
-    let mut vec_string: Vec<String> = Vec::new();
-    let mut i = 0;
-    for j in 0..content.len() {
-        if content.chars().nth(j).unwrap() == '\n' {
-            if i != j - 1 {
-                //no empty string
-                vec_string.push(content[i..j - 1].to_string()); // Ignore \r as well
+enum RedisTypes {
+    BulkString(String),
+    Integer(i32),
+    List(Vec<RedisTypes>),
+    SimpleString(String),
+    Error(String),
+}
+
+fn convert_string_to_redis_types(content: String) -> RedisTypes {
+    let first_char = content.chars().nth(0).unwrap();
+
+    match first_char {
+        '+' => {
+            // Simple String
+            let simple_string: String = content
+                .strip_prefix("+")
+                .unwrap()
+                .strip_suffix("\r\n")
+                .unwrap()
+                .to_string();
+            RedisTypes::SimpleString(simple_string)
+        }
+        '$' => {
+            // String
+            let string: String = content
+                .strip_prefix("$")
+                .unwrap()
+                .split("\r\n")
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .to_string();
+            RedisTypes::BulkString(string)
+        }
+        ':' => {
+            // Integer
+            let integer: i32 = content
+                .strip_prefix(":")
+                .unwrap()
+                .split("\r\n")
+                .collect::<Vec<&str>>()
+                .get(1)
+                .unwrap()
+                .parse::<i32>()
+                .unwrap();
+            RedisTypes::Integer(integer)
+        }
+        '*' => {
+            // Array
+            println!("Content: {}", content);
+            let first_rn = content.find("\r\n").unwrap();
+            // Everything to the right of the first \r\n
+            let arr_content = content[first_rn + 2..].split("\r\n").collect::<Vec<&str>>();
+            println!("Array Content: {:?}", arr_content);
+
+            let mut array: Vec<RedisTypes> = vec![];
+
+            for i in 0..arr_content.len() as i32 {
+                let first_char = arr_content.get(i as usize).unwrap().chars().nth(0).unwrap();
+                if first_char == ':' {
+                    let integer: RedisTypes = convert_string_to_redis_types(
+                        arr_content.get(i as usize).unwrap().to_string() + "\r\n",
+                    );
+                    array.push(integer);
+                } else if first_char == '$' {
+                    let total_string = arr_content.get(i as usize).unwrap().to_string()
+                        + "\r\n"
+                        + arr_content.get(i as usize + 1).unwrap()
+                        + "\r\n";
+                    println!("Total String: {}", total_string);
+                    let string: RedisTypes = convert_string_to_redis_types(total_string);
+
+                    array.push(string);
+                }
             }
-            i = j + 1;
+
+            RedisTypes::List(array)
+        }
+        _ => RedisTypes::Error("Invalid request".to_string()),
+    }
+}
+
+fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>())
+}
+
+fn response_redis_type(redis_type: RedisTypes) -> Option<String> {
+    match redis_type {
+        RedisTypes::BulkString(content) => {
+            if content == "PING" {
+                return Some("+PONG\r\n".to_string());
+            } else {
+                println!("Bulk String: {}", content);
+            }
+            return None;
+        }
+        RedisTypes::Integer(content) => {
+            println!("Integer: {}", content);
+            return None;
+        }
+        RedisTypes::List(content) => {
+            println!("Running in list");
+            for r in &content {
+                print_type_of(&r);
+            }
+            println!("Content size: {}", content.len());
+
+            let first_element = content.get(0).unwrap();
+
+            match first_element {
+                RedisTypes::BulkString(content_string) => {
+                    println!("Content String: {}", content_string);
+                    if content_string == "ECHO" {
+                        if let RedisTypes::BulkString(content_echoed) = content.get(1).unwrap() {
+                            println!("Echoed: {}", content_echoed);
+                            return Some(format!(
+                                "${}\r\n{}\r\n",
+                                content_echoed.len(),
+                                content_echoed
+                            ));
+                        }
+                    } else {
+                        return response_redis_type(RedisTypes::BulkString(content_string.clone()));
+                    }
+                }
+                RedisTypes::List(_) => println!("List not supported yet"),
+                RedisTypes::Integer(integer) => {
+                    return response_redis_type(RedisTypes::Integer(*integer))
+                }
+                RedisTypes::SimpleString(string) => {
+                    return response_redis_type(RedisTypes::SimpleString(string.clone()));
+                }
+                RedisTypes::Error(_) => println!("-Error detected"),
+            }
+
+            if let RedisTypes::BulkString(content_string) = content.get(0).unwrap() {
+                println!("Content String: {}", content_string);
+                if content_string == "ECHO" {
+                    if let RedisTypes::BulkString(content_echoed) = content.get(1).unwrap() {
+                        println!("Echoed: {}", content_echoed);
+                        return Some(format!("{}\r\n", content_echoed));
+                    }
+                }
+            }
+            return None;
+        }
+        RedisTypes::SimpleString(content) => {
+            if content == "PING" {
+                return Some("+PONG\r\n".to_string());
+            } else {
+                println!("Simple String: {}", content);
+            }
+            return None;
+        }
+        RedisTypes::Error(content) => {
+            println!("Error: {}", content);
+            return None;
         }
     }
-    vec_string.push(content[i..].to_string());
-    println!("vec_string: {:?}", vec_string);
-    vec_string
 }
 
 fn main() {
@@ -36,7 +180,16 @@ fn main() {
                         if read_count == 0 {
                             break;
                         }
-                        stream.write("+PONG\r\n".as_bytes()).expect("HTTP Response");
+
+                        println!(
+                            "Request: {:?}",
+                            String::from_utf8(request_buffer.to_vec()).unwrap()
+                        );
+                        let request: RedisTypes = convert_string_to_redis_types(
+                            String::from_utf8(request_buffer.to_vec()).unwrap(),
+                        );
+                        let response = response_redis_type(request).unwrap();
+                        stream.write(response.as_bytes()).expect("HTTP Response");
                     }
                 });
             }
