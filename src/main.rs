@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     net::TcpListener,
 };
@@ -89,19 +90,34 @@ fn print_type_of<T>(_: &T) {
     println!("{}", std::any::type_name::<T>())
 }
 
-fn response_redis_type(redis_type: RedisTypes) -> Option<String> {
+fn response_redis_type(
+    redis_type: RedisTypes,
+    hashmap: HashMap<String, String>,
+) -> (Option<String>, Option<(String, String)>) {
     match redis_type {
         RedisTypes::BulkString(content) => {
             if content == "PING" {
-                return Some("+PONG\r\n".to_string());
+                return (Some("+PONG\r\n".to_string()), None);
             } else {
                 println!("Bulk String: {}", content);
             }
-            return None;
+            return (None, None);
         }
         RedisTypes::Integer(content) => {
             println!("Integer: {}", content);
-            return None;
+            return (None, None);
+        }
+        RedisTypes::SimpleString(content) => {
+            if content == "PING" {
+                return (Some("+PONG\r\n".to_string()), None);
+            } else {
+                println!("Simple String: {}", content);
+            }
+            return (None, None);
+        }
+        RedisTypes::Error(content) => {
+            println!("Error: {}", content);
+            return (None, None);
         }
         RedisTypes::List(content) => {
             println!("Running in list");
@@ -118,48 +134,77 @@ fn response_redis_type(redis_type: RedisTypes) -> Option<String> {
                     if content_string == "ECHO" {
                         if let RedisTypes::BulkString(content_echoed) = content.get(1).unwrap() {
                             println!("Echoed: {}", content_echoed);
-                            return Some(format!(
-                                "${}\r\n{}\r\n",
-                                content_echoed.len(),
-                                content_echoed
-                            ));
+                            return (
+                                Some(format!(
+                                    "${}\r\n{}\r\n",
+                                    content_echoed.len(),
+                                    content_echoed
+                                )),
+                                None,
+                            );
                         }
+                        return (None, None);
+                    } else if content_string == "SET" {
+                        println!("Setting value");
+                        if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
+                            if let RedisTypes::BulkString(value) = content.get(2).unwrap() {
+                                return (
+                                    Some("+OK\r\n".to_string()),
+                                    Some((key.clone(), value.clone())),
+                                );
+                            }
+                        }
+                        return (None, None);
+                    } else if content_string == "GET" {
+                        if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
+                            if let Some(value) = hashmap.get(key) {
+                                return (Some(format!("${}\r\n{}\r\n", value.len(), value)), None);
+                            }
+                        }
+                        return (None, None);
                     } else {
-                        return response_redis_type(RedisTypes::BulkString(content_string.clone()));
+                        return response_redis_type(
+                            RedisTypes::BulkString(content_string.clone()),
+                            hashmap,
+                        );
                     }
                 }
-                RedisTypes::List(_) => println!("List not supported yet"),
+                RedisTypes::List(_) => (None, None),
                 RedisTypes::Integer(integer) => {
-                    return response_redis_type(RedisTypes::Integer(*integer))
+                    return response_redis_type(RedisTypes::Integer(*integer), hashmap)
                 }
                 RedisTypes::SimpleString(string) => {
-                    return response_redis_type(RedisTypes::SimpleString(string.clone()));
+                    return response_redis_type(RedisTypes::SimpleString(string.clone()), hashmap);
                 }
-                RedisTypes::Error(_) => println!("-Error detected"),
+                RedisTypes::Error(_) => (None, None),
             }
 
-            if let RedisTypes::BulkString(content_string) = content.get(0).unwrap() {
-                println!("Content String: {}", content_string);
-                if content_string == "ECHO" {
-                    if let RedisTypes::BulkString(content_echoed) = content.get(1).unwrap() {
-                        println!("Echoed: {}", content_echoed);
-                        return Some(format!("{}\r\n", content_echoed));
-                    }
-                }
-            }
-            return None;
-        }
-        RedisTypes::SimpleString(content) => {
-            if content == "PING" {
-                return Some("+PONG\r\n".to_string());
-            } else {
-                println!("Simple String: {}", content);
-            }
-            return None;
-        }
-        RedisTypes::Error(content) => {
-            println!("Error: {}", content);
-            return None;
+            // if let RedisTypes::BulkString(content_string) = content.get(0).unwrap() {
+            //     println!("Content String: {}", content_string);
+            //     if content_string == "ECHO" {
+            //         if let RedisTypes::BulkString(content_echoed) = content.get(1).unwrap() {
+            //             println!("Echoed: {}", content_echoed);
+            //             return (Some(format!("{}\r\n", content_echoed)), None);
+            //         }
+            //     } else if content_string == "SET" {
+            //         println!("Setting value");
+            //         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
+            //             if let RedisTypes::BulkString(value) = content.get(2).unwrap() {
+            //                 return (
+            //                     Some("+OK\r\n".to_string()),
+            //                     Some((key.clone(), value.clone())),
+            //                 );
+            //             }
+            //         }
+            //     } else if content_string == "GET" {
+            //         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
+            //             if let Some(value) = hashmap.get(key) {
+            //                 return (Some(format!("${}\r\n{}\r\n", value.len(), value)), None);
+            //             }
+            //         }
+            //     }
+            // }
+            // return (None, None);
         }
     }
 }
@@ -174,6 +219,7 @@ fn main() {
             Ok(mut stream) => {
                 println!("accepted new connection");
                 let _handle = std::thread::spawn(move || {
+                    let mut global_state: HashMap<String, String> = HashMap::new();
                     let mut request_buffer = [0; 512];
                     loop {
                         let read_count = stream.read(&mut request_buffer).expect("HTTP Request");
@@ -188,8 +234,19 @@ fn main() {
                         let request: RedisTypes = convert_string_to_redis_types(
                             String::from_utf8(request_buffer.to_vec()).unwrap(),
                         );
-                        let response = response_redis_type(request).unwrap();
-                        stream.write(response.as_bytes()).expect("HTTP Response");
+                        let (response, gs) = response_redis_type(request, global_state.clone());
+
+                        if let Some((key, value)) = gs {
+                            global_state.insert(key, value);
+                        }
+
+                        stream
+                            .write(
+                                response
+                                    .expect("Cannot get response from the server")
+                                    .as_bytes(),
+                            )
+                            .expect("HTTP Response");
                     }
                 });
             }
