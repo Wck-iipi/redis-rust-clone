@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     io::{Read, Write},
     net::TcpListener,
+    time::SystemTime,
 };
 
 enum RedisTypes {
@@ -92,32 +93,32 @@ fn print_type_of<T>(_: &T) {
 
 fn response_redis_type(
     redis_type: RedisTypes,
-    hashmap: HashMap<String, String>,
-) -> (Option<String>, Option<(String, String)>) {
+    hashmap: HashMap<String, (String, Option<i32>, Option<SystemTime>)>,
+) -> (Option<String>, Option<(String, String)>, Option<i32>) {
     match redis_type {
         RedisTypes::BulkString(content) => {
             if content == "PING" {
-                return (Some("+PONG\r\n".to_string()), None);
+                return (Some("+PONG\r\n".to_string()), None, None);
             } else {
                 println!("Bulk String: {}", content);
             }
-            return (None, None);
+            return (None, None, None);
         }
         RedisTypes::Integer(content) => {
             println!("Integer: {}", content);
-            return (None, None);
+            return (None, None, None);
         }
         RedisTypes::SimpleString(content) => {
             if content == "PING" {
-                return (Some("+PONG\r\n".to_string()), None);
+                return (Some("+PONG\r\n".to_string()), None, None);
             } else {
                 println!("Simple String: {}", content);
             }
-            return (None, None);
+            return (None, None, None);
         }
         RedisTypes::Error(content) => {
             println!("Error: {}", content);
-            return (None, None);
+            return (None, None, None);
         }
         RedisTypes::List(content) => {
             println!("Running in list");
@@ -141,27 +142,46 @@ fn response_redis_type(
                                     content_echoed
                                 )),
                                 None,
+                                None,
                             );
                         }
-                        return (None, None);
+                        return (None, None, None);
                     } else if content_string == "SET" {
                         println!("Setting value");
                         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
                             if let RedisTypes::BulkString(value) = content.get(2).unwrap() {
+                                if let RedisTypes::BulkString(value) = content.get(3).unwrap() {
+                                    if (value.to_lowercase() == "px") {
+                                        if let RedisTypes::Integer(value) = content.get(4).unwrap()
+                                        {
+                                            return (
+                                                Some("+OK\r\n".to_string()),
+                                                Some((key.clone(), value.to_string())),
+                                                Some(value.clone()),
+                                            );
+                                        }
+                                    }
+                                }
                                 return (
                                     Some("+OK\r\n".to_string()),
                                     Some((key.clone(), value.clone())),
+                                    None,
                                 );
                             }
                         }
-                        return (None, None);
+                        return (None, None, None);
                     } else if content_string == "GET" {
                         if let RedisTypes::BulkString(key) = content.get(1).unwrap() {
                             if let Some(value) = hashmap.get(key) {
-                                return (Some(format!("${}\r\n{}\r\n", value.len(), value)), None);
+                                println!("Key is {}", key);
+                                return (
+                                    Some(format!("${}\r\n{}\r\n", value.0.len(), value.0)),
+                                    None,
+                                    None,
+                                );
                             }
                         }
-                        return (None, None);
+                        return (Some("$-1\r\n".to_string()), None, None);
                     } else {
                         return response_redis_type(
                             RedisTypes::BulkString(content_string.clone()),
@@ -169,14 +189,14 @@ fn response_redis_type(
                         );
                     }
                 }
-                RedisTypes::List(_) => (None, None),
+                RedisTypes::List(_) => (None, None, None),
                 RedisTypes::Integer(integer) => {
                     return response_redis_type(RedisTypes::Integer(*integer), hashmap)
                 }
                 RedisTypes::SimpleString(string) => {
                     return response_redis_type(RedisTypes::SimpleString(string.clone()), hashmap);
                 }
-                RedisTypes::Error(_) => (None, None),
+                RedisTypes::Error(_) => (None, None, None),
             }
 
             // if let RedisTypes::BulkString(content_string) = content.get(0).unwrap() {
@@ -204,7 +224,7 @@ fn response_redis_type(
             //         }
             //     }
             // }
-            // return (None, None);
+            // return (None, None, None);
         }
     }
 }
@@ -219,7 +239,10 @@ fn main() {
             Ok(mut stream) => {
                 println!("accepted new connection");
                 let _handle = std::thread::spawn(move || {
-                    let mut global_state: HashMap<String, String> = HashMap::new();
+                    let mut global_state: HashMap<
+                        String,
+                        (String, Option<i32>, Option<SystemTime>),
+                    > = HashMap::new();
                     let mut request_buffer = [0; 512];
                     loop {
                         let read_count = stream.read(&mut request_buffer).expect("HTTP Request");
@@ -234,10 +257,18 @@ fn main() {
                         let request: RedisTypes = convert_string_to_redis_types(
                             String::from_utf8(request_buffer.to_vec()).unwrap(),
                         );
-                        let (response, gs) = response_redis_type(request, global_state.clone());
+                        let (response, gs, time) =
+                            response_redis_type(request, global_state.clone());
 
-                        if let Some((key, value)) = gs {
-                            global_state.insert(key, value);
+                        if let Some(time) = time {
+                            if let Some((key, value)) = gs {
+                                global_state
+                                    .insert(key, (value, Some(time), Some(SystemTime::now())));
+                            }
+                        } else {
+                            if let Some((key, value)) = gs {
+                                global_state.insert(key, (value, None, None));
+                            }
                         }
 
                         stream
