@@ -219,11 +219,30 @@ fn response_redis_type(
                         return (Some("$-1\r\n".to_string()), None, None);
                     } else if content_string == "INFO" {
                         let replice_of = std::env::args().nth(4);
+                        let role: String;
+                        let master_replid =
+                            "master_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
+                        let master_repl_offset = "master_repl_offset:0";
+
                         if let Some(_) = replice_of {
-                            return (Some(format!("$10\r\nrole:slave\r\n")), None, None);
+                            role = "role:slave".to_string();
                         } else {
-                            return (Some(format!("$11\r\nrole:master\r\n")), None, None);
+                            role = "role:master".to_string();
                         }
+                        let total_string =
+                            format!("{}\n{}\n{}\n", role, master_replid, master_repl_offset);
+
+                        return (
+                            Some(format!("${}\r\n{}\r\n", total_string.len(), total_string)),
+                            None,
+                            None,
+                        );
+
+                        // if let Some(_) = replice_of {
+                        //     return (Some(format!("$10\r\nrole:slave\r\n")), None, None);
+                        // } else {
+                        //     return (Some(format!("$11\r\nrole:master\r\n")), None, None);
+                        // }
                     } else {
                         return response_redis_type(
                             RedisTypes::BulkString(content_string.clone()),
