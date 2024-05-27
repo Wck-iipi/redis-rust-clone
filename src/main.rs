@@ -220,7 +220,7 @@ fn response_redis_type(
                     } else if content_string == "INFO" {
                         let replice_of = std::env::args().nth(4);
                         if let Some(_) = replice_of {
-                            return (Some(format!("$11\r\nrole:slave\r\n")), None, None);
+                            return (Some(format!("$10\r\nrole:slave\r\n")), None, None);
                         } else {
                             return (Some(format!("$11\r\nrole:master\r\n")), None, None);
                         }
