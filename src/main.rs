@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::format,
     io::{Read, Write},
     net::TcpListener,
     time::SystemTime,
@@ -132,7 +133,8 @@ fn response_redis_type(
             match first_element {
                 RedisTypes::BulkString(content_string) => {
                     println!("Content String: {}", content_string);
-                    if content_string == "ECHO" {
+
+                    if content_string.to_lowercase() == "echo" {
                         if let RedisTypes::BulkString(content_echoed) = content.get(1).unwrap() {
                             println!("Echoed: {}", content_echoed);
                             return (
@@ -215,6 +217,8 @@ fn response_redis_type(
                             }
                         }
                         return (Some("$-1\r\n".to_string()), None, None);
+                    } else if content_string == "INFO" {
+                        return (Some(format!("$11\r\nrole:master\r\n")), None, None);
                     } else {
                         return response_redis_type(
                             RedisTypes::BulkString(content_string.clone()),
