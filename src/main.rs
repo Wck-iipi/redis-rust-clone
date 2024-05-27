@@ -14,6 +14,31 @@ enum RedisTypes {
     Error(String),
 }
 
+fn convert_redis_types_to_string(content: RedisTypes) -> String {
+    match content {
+        RedisTypes::BulkString(content) => {
+            return format!("${}\r\n{}\r\n", content.len(), content);
+        }
+        RedisTypes::Integer(content) => {
+            return format!(":{}\r\n", content);
+        }
+        RedisTypes::List(content) => {
+            let mut total_string = String::new();
+            let length = content.len();
+            for c in content {
+                total_string.push_str(&convert_redis_types_to_string(c));
+            }
+            return format!("*{}\r\n{}\r\n", length, total_string);
+        }
+        RedisTypes::SimpleString(content) => {
+            return format!("+{}\r\n", content);
+        }
+        RedisTypes::Error(content) => {
+            return format!("-{}\r\n", content);
+        }
+    }
+}
+
 fn convert_string_to_redis_types(content: String) -> RedisTypes {
     let first_char = content.chars().nth(0).unwrap();
 
@@ -265,6 +290,18 @@ fn response_redis_type(
 
 fn main() {
     println!("Logs from your program will appear here!");
+
+    let replica_of = std::env::args().nth(4);
+
+    if let Some(replica) = replica_of {
+        let replica_string = replica.split(" ").collect::<Vec<&str>>();
+        let host = replica_string.get(0).unwrap().to_string();
+        let port = replica_string.get(1).unwrap().to_string();
+        let mut stream = std::net::TcpStream::connect(format!("{}:{}", host, port)).unwrap();
+        stream
+            .write_all(b"*1\r\n$4\r\nping\r\n")
+            .expect("failed to ping master server");
+    }
 
     let port = std::env::args().nth(2).unwrap_or("6379".to_string());
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
