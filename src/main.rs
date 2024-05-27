@@ -218,7 +218,12 @@ fn response_redis_type(
                         }
                         return (Some("$-1\r\n".to_string()), None, None);
                     } else if content_string == "INFO" {
-                        return (Some(format!("$11\r\nrole:master\r\n")), None, None);
+                        let replice_of = std::env::args().nth(4);
+                        if Some(x) = replice_of {
+                            return (Some(format!("$11\r\nrole:slave\r\n")), None, None);
+                        } else {
+                            return (Some(format!("$11\r\nrole:master\r\n")), None, None);
+                        }
                     } else {
                         return response_redis_type(
                             RedisTypes::BulkString(content_string.clone()),
